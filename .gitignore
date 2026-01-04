@@ -36,3 +36,11 @@ __pycache__/
 
 # System files
 .DS_Store
+
+# Legacy Quartus Files
+*.bdf
+*.bsf
+*.vwf
+*.dpf
+*.pin
+*.qip
