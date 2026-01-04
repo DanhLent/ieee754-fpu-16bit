@@ -1,0 +1,38 @@
+# Quartus compilation garbage
+db/
+incremental_db/
+output_files/
+simulation/
+*.qws
+*.ppf
+*.ddb
+*.csv
+*.cmp
+*.sip
+*.spd
+*.bsf
+*.f
+*.kpt
+*.log
+*.htm
+*.rpt
+*.smsg
+*.summary
+*.jdi
+*.pin
+*.sof
+*.pof
+*.jam
+*.jbc
+*.done
+*.qdf
+*.wlf
+wlft*
+
+# Generated Test Vectors
+test_vectors.txt
+*.pyc
+__pycache__/
+
+# System files
+.DS_Store

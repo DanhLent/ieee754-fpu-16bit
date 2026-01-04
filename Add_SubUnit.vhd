@@ -1,0 +1,541 @@
+-- Copyright (C) 1991-2013 Altera Corporation
+-- Your use of Altera Corporation's design tools, logic functions 
+-- and other software and tools, and its AMPP partner logic 
+-- functions, and any output files from any of the foregoing 
+-- (including device programming or simulation files), and any 
+-- associated documentation or information are expressly subject 
+-- to the terms and conditions of the Altera Program License 
+-- Subscription Agreement, Altera MegaCore Function License 
+-- Agreement, or other applicable license agreement, including, 
+-- without limitation, that your use is for the sole purpose of 
+-- programming logic devices manufactured by Altera and sold by 
+-- Altera or its authorized distributors.  Please refer to the 
+-- applicable agreement for further details.
+
+-- PROGRAM		"Quartus II 64-Bit"
+-- VERSION		"Version 13.0.1 Build 232 06/12/2013 Service Pack 1 SJ Web Edition"
+-- CREATED		"Sun Dec 28 17:56:18 2025"
+
+LIBRARY ieee;
+USE ieee.std_logic_1164.all; 
+
+LIBRARY work;
+
+ENTITY Add_SubUnit IS 
+	PORT
+	(
+		Select :  IN  STD_LOGIC;
+		CLK :  IN  STD_LOGIC;
+		Start :  IN  STD_LOGIC;
+		Ain :  IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
+		Bin :  IN  STD_LOGIC_VECTOR(15 DOWNTO 0);
+		Done :  OUT  STD_LOGIC;
+		Out :  OUT  STD_LOGIC_VECTOR(15 DOWNTO 0)
+	);
+END Add_SubUnit;
+
+ARCHITECTURE bdf_type OF Add_SubUnit IS 
+
+COMPONENT mux2_1_5bit
+	PORT(S : IN STD_LOGIC;
+		 D0 : IN STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 D1 : IN STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 Y : OUT STD_LOGIC_VECTOR(4 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT register_16bit
+	PORT(CLK : IN STD_LOGIC;
+		 Enable : IN STD_LOGIC;
+		 Reset : IN STD_LOGIC;
+		 In : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+		 Q : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT sub_6bit
+	PORT(A : IN STD_LOGIC_VECTOR(5 DOWNTO 0);
+		 B : IN STD_LOGIC_VECTOR(5 DOWNTO 0);
+		 Cout : OUT STD_LOGIC;
+		 S : OUT STD_LOGIC_VECTOR(5 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT mux2_1_1bit
+	PORT(D0 : IN STD_LOGIC;
+		 D1 : IN STD_LOGIC;
+		 S : IN STD_LOGIC;
+		 Y : OUT STD_LOGIC
+	);
+END COMPONENT;
+
+COMPONENT data_fp16
+	PORT(In : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+		 Sign : OUT STD_LOGIC;
+		 E : OUT STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 M : OUT STD_LOGIC_VECTOR(9 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT mux2_1_16bit
+	PORT(S : IN STD_LOGIC;
+		 D0 : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+		 D1 : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+		 Y : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT compare_5bit
+	PORT(Ain : IN STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 Bin : IN STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 A_gt_B : OUT STD_LOGIC;
+		 Diff : OUT STD_LOGIC_VECTOR(4 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT shifter_right
+	PORT(In : IN STD_LOGIC_VECTOR(10 DOWNTO 0);
+		 S : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
+		 OUT : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT addsub
+	PORT(Select : IN STD_LOGIC;
+		 Ain : IN STD_LOGIC_VECTOR(14 DOWNTO 0);
+		 Bin : IN STD_LOGIC_VECTOR(14 DOWNTO 0);
+		 Cout : OUT STD_LOGIC;
+		 OUT : OUT STD_LOGIC_VECTOR(14 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT check_zero
+	PORT(In : IN STD_LOGIC_VECTOR(14 DOWNTO 0);
+		 is_zero : OUT STD_LOGIC
+	);
+END COMPONENT;
+
+COMPONENT detect_zero
+	PORT(In : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+		 Count : OUT STD_LOGIC_VECTOR(3 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT shifter_left
+	PORT(In : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+		 S : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
+		 OUT : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT dataout_fp16
+	PORT(In : IN STD_LOGIC_VECTOR(15 DOWNTO 0);
+		 Out : OUT STD_LOGIC_VECTOR(15 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT mux2_1_10bit
+	PORT(S : IN STD_LOGIC;
+		 D0 : IN STD_LOGIC_VECTOR(9 DOWNTO 0);
+		 D1 : IN STD_LOGIC_VECTOR(9 DOWNTO 0);
+		 Y : OUT STD_LOGIC_VECTOR(9 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT mux2_1_4bit
+	PORT(S : IN STD_LOGIC;
+		 D0 : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
+		 D1 : IN STD_LOGIC_VECTOR(3 DOWNTO 0);
+		 Y : OUT STD_LOGIC_VECTOR(3 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT adder_5bit
+	PORT(Cin : IN STD_LOGIC;
+		 A : IN STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 B : IN STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 Cout : OUT STD_LOGIC;
+		 S : OUT STD_LOGIC_VECTOR(4 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT mux2_1_11bit
+	PORT(S : IN STD_LOGIC;
+		 D0 : IN STD_LOGIC_VECTOR(10 DOWNTO 0);
+		 D1 : IN STD_LOGIC_VECTOR(10 DOWNTO 0);
+		 Y : OUT STD_LOGIC_VECTOR(10 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT register_15bit
+	PORT(CLK : IN STD_LOGIC;
+		 Enable : IN STD_LOGIC;
+		 Reset : IN STD_LOGIC;
+		 In : IN STD_LOGIC_VECTOR(14 DOWNTO 0);
+		 Q : OUT STD_LOGIC_VECTOR(14 DOWNTO 0)
+	);
+END COMPONENT;
+
+COMPONENT register_5bit
+	PORT(CLK : IN STD_LOGIC;
+		 Enable : IN STD_LOGIC;
+		 Reset : IN STD_LOGIC;
+		 In : IN STD_LOGIC_VECTOR(4 DOWNTO 0);
+		 Q : OUT STD_LOGIC_VECTOR(4 DOWNTO 0)
+	);
+END COMPONENT;
+
+SIGNAL	A_gt_B :  STD_LOGIC;
+SIGNAL	Count :  STD_LOGIC_VECTOR(3 DOWNTO 0);
+SIGNAL	Cout :  STD_LOGIC;
+SIGNAL	Cout_nSel :  STD_LOGIC;
+SIGNAL	Diff :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	E_max :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	E_max_nor :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	E_Sub_6bit :  STD_LOGIC_VECTOR(5 DOWNTO 0);
+SIGNAL	Exp_A :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	Exp_B :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	gdfx_temp0 :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	GND :  STD_LOGIC;
+SIGNAL	Man_A_Sign :  STD_LOGIC_VECTOR(10 DOWNTO 0);
+SIGNAL	Man_B_Sign :  STD_LOGIC_VECTOR(10 DOWNTO 0);
+SIGNAL	Man_Large :  STD_LOGIC_VECTOR(10 DOWNTO 0);
+SIGNAL	Man_Small_Shifted :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	Norm_Man :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	Q_REG1_MAN_A :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	Result :  STD_LOGIC_VECTOR(15 TO 15);
+SIGNAL	Sign_A :  STD_LOGIC;
+SIGNAL	Sign_B :  STD_LOGIC;
+SIGNAL	Sign_Temp :  STD_LOGIC;
+SIGNAL	Sum_Result :  STD_LOGIC_VECTOR(14 DOWNTO 0);
+SIGNAL	Sum_Result_reg :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	VCC :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_0 :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_1 :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_2 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_3 :  STD_LOGIC_VECTOR(0 TO 4);
+SIGNAL	SYNTHESIZED_WIRE_4 :  STD_LOGIC;
+SIGNAL	DFF_inst4 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_5 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_6 :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_7 :  STD_LOGIC_VECTOR(0 TO 15);
+SIGNAL	SYNTHESIZED_WIRE_8 :  STD_LOGIC;
+SIGNAL	DFF_REG_OP1 :  STD_LOGIC;
+SIGNAL	DFF_inst5 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_9 :  STD_LOGIC_VECTOR(10 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_10 :  STD_LOGIC_VECTOR(3 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_18 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_11 :  STD_LOGIC_VECTOR(14 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_12 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_13 :  STD_LOGIC;
+SIGNAL	DFF_inst2 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_14 :  STD_LOGIC;
+SIGNAL	SYNTHESIZED_WIRE_15 :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_16 :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	SYNTHESIZED_WIRE_17 :  STD_LOGIC;
+SIGNAL	DFF_REG_SIGN_1 :  STD_LOGIC;
+
+SIGNAL	GDFX_TEMP_SIGNAL_2 :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	GDFX_TEMP_SIGNAL_3 :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	GDFX_TEMP_SIGNAL_7 :  STD_LOGIC_VECTOR(15 DOWNTO 0);
+SIGNAL	GDFX_TEMP_SIGNAL_1 :  STD_LOGIC_VECTOR(5 DOWNTO 0);
+SIGNAL	GDFX_TEMP_SIGNAL_0 :  STD_LOGIC_VECTOR(5 DOWNTO 0);
+SIGNAL	GDFX_TEMP_SIGNAL_5 :  STD_LOGIC_VECTOR(4 DOWNTO 0);
+SIGNAL	GDFX_TEMP_SIGNAL_6 :  STD_LOGIC_VECTOR(14 DOWNTO 0);
+SIGNAL	GDFX_TEMP_SIGNAL_4 :  STD_LOGIC_VECTOR(3 DOWNTO 0);
+
+BEGIN 
+SYNTHESIZED_WIRE_3 <= "00000";
+SYNTHESIZED_WIRE_7 <= "0000000000000000";
+SYNTHESIZED_WIRE_14 <= '0';
+
+GDFX_TEMP_SIGNAL_2 <= (Cout_nSel & Sum_Result_reg(14 DOWNTO 0));
+GDFX_TEMP_SIGNAL_3 <= (Cout_nSel & Sum_Result_reg(14 DOWNTO 0));
+GDFX_TEMP_SIGNAL_7 <= (Cout & Sum_Result(14 DOWNTO 0));
+GDFX_TEMP_SIGNAL_1 <= (GND & GND & Count(3 DOWNTO 0));
+GDFX_TEMP_SIGNAL_0 <= (GND & E_max_nor(4 DOWNTO 0));
+GDFX_TEMP_SIGNAL_5 <= (GND & GND & GND & GND & VCC);
+GDFX_TEMP_SIGNAL_6 <= (Man_Large(10 DOWNTO 0) & GND & GND & GND & GND);
+GDFX_TEMP_SIGNAL_4 <= (VCC & VCC & VCC & VCC);
+
+
+b2v_Compare_Exp : mux2_1_5bit
+PORT MAP(S => A_gt_B,
+		 D0 => Exp_B,
+		 D1 => Exp_A,
+		 Y => E_max);
+
+
+b2v_Final : mux2_1_5bit
+PORT MAP(S => Cout_nSel,
+		 D0 => SYNTHESIZED_WIRE_0,
+		 D1 => E_max_nor,
+		 Y => gdfx_temp0(14 DOWNTO 10));
+
+
+
+b2v_inst1 : register_16bit
+PORT MAP(CLK => CLK,
+		 Enable => VCC,
+		 Reset => GND,
+		 In => SYNTHESIZED_WIRE_1,
+		 Q => Out);
+
+
+b2v_inst10 : sub_6bit
+PORT MAP(A => GDFX_TEMP_SIGNAL_0,
+		 B => GDFX_TEMP_SIGNAL_1,
+		 S => E_Sub_6bit);
+
+
+SYNTHESIZED_WIRE_2 <= Sign_A XOR Sign_B;
+
+
+SYNTHESIZED_WIRE_17 <= SYNTHESIZED_WIRE_2 XOR Select;
+
+
+
+b2v_inst14 : mux2_1_5bit
+PORT MAP(S => E_Sub_6bit(5),
+		 D0 => E_Sub_6bit(4 DOWNTO 0),
+		 D1 => SYNTHESIZED_WIRE_3,
+		 Y => SYNTHESIZED_WIRE_0);
+
+
+
+
+
+b2v_inst18 : mux2_1_1bit
+PORT MAP(D0 => SYNTHESIZED_WIRE_4,
+		 D1 => Sign_A,
+		 S => A_gt_B,
+		 Y => Sign_Temp);
+
+
+b2v_inst19 : data_fp16
+PORT MAP(In => Ain,
+		 Sign => Sign_A,
+		 E => Exp_A,
+		 M => Man_A_Sign(9 DOWNTO 0));
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	DFF_inst2 <= DFF_inst4;
+END IF;
+END PROCESS;
+
+
+b2v_inst23 : mux2_1_16bit
+PORT MAP(S => SYNTHESIZED_WIRE_5,
+		 D0 => SYNTHESIZED_WIRE_6,
+		 D1 => SYNTHESIZED_WIRE_7,
+		 Y => SYNTHESIZED_WIRE_1);
+
+
+
+Cout_nSel <= Sum_Result_reg(15) AND SYNTHESIZED_WIRE_8;
+
+
+SYNTHESIZED_WIRE_8 <= NOT(DFF_REG_OP1);
+
+
+
+SYNTHESIZED_WIRE_4 <= Select XOR Sign_B;
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	Done <= DFF_inst5;
+END IF;
+END PROCESS;
+
+
+b2v_inst30 : data_fp16
+PORT MAP(In => Bin,
+		 Sign => Sign_B,
+		 E => Exp_B,
+		 M => Man_B_Sign(9 DOWNTO 0));
+
+
+b2v_inst31 : compare_5bit
+PORT MAP(Ain => Exp_A,
+		 Bin => Exp_B,
+		 A_gt_B => A_gt_B,
+		 Diff => Diff);
+
+
+b2v_inst32 : shifter_right
+PORT MAP(In => SYNTHESIZED_WIRE_9,
+		 S => SYNTHESIZED_WIRE_10,
+		 OUT => Man_Small_Shifted);
+
+
+b2v_inst33 : addsub
+PORT MAP(Select => SYNTHESIZED_WIRE_18,
+		 Ain => SYNTHESIZED_WIRE_11,
+		 Bin => Q_REG1_MAN_A(15 DOWNTO 1),
+		 Cout => Cout,
+		 OUT => Sum_Result);
+
+
+b2v_inst34 : check_zero
+PORT MAP(In => Sum_Result_reg(14 DOWNTO 0),
+		 is_zero => SYNTHESIZED_WIRE_12);
+
+
+b2v_inst37 : detect_zero
+PORT MAP(In => GDFX_TEMP_SIGNAL_2,
+		 Count => Count);
+
+
+b2v_inst38 : shifter_left
+PORT MAP(In => GDFX_TEMP_SIGNAL_3,
+		 S => Count,
+		 OUT => Norm_Man);
+
+
+SYNTHESIZED_WIRE_13 <= NOT(Cout_nSel);
+
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	DFF_inst4 <= Start;
+END IF;
+END PROCESS;
+
+
+SYNTHESIZED_WIRE_5 <= SYNTHESIZED_WIRE_12 AND SYNTHESIZED_WIRE_13;
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	DFF_inst5 <= DFF_inst2;
+END IF;
+END PROCESS;
+
+
+b2v_inst564 : dataout_fp16
+PORT MAP(In => gdfx_temp0,
+		 Out => SYNTHESIZED_WIRE_6);
+
+
+
+b2v_inst7 : mux2_1_10bit
+PORT MAP(S => Cout_nSel,
+		 D0 => Norm_Man(13 DOWNTO 4),
+		 D1 => Sum_Result_reg(14 DOWNTO 5),
+		 Y => gdfx_temp0(9 DOWNTO 0));
+
+
+b2v_inst8 : mux2_1_4bit
+PORT MAP(S => Diff(4),
+		 D0 => Diff(3 DOWNTO 0),
+		 D1 => GDFX_TEMP_SIGNAL_4,
+		 Y => SYNTHESIZED_WIRE_10);
+
+
+b2v_inst9 : adder_5bit
+PORT MAP(Cin => SYNTHESIZED_WIRE_14,
+		 A => SYNTHESIZED_WIRE_15,
+		 B => GDFX_TEMP_SIGNAL_5,
+		 S => E_max_nor);
+
+
+b2v_Man_Larger : mux2_1_11bit
+PORT MAP(S => A_gt_B,
+		 D0 => Man_B_Sign,
+		 D1 => Man_A_Sign,
+		 Y => Man_Large);
+
+
+b2v_Man_Small : mux2_1_11bit
+PORT MAP(S => A_gt_B,
+		 D0 => Man_A_Sign,
+		 D1 => Man_B_Sign,
+		 Y => SYNTHESIZED_WIRE_9);
+
+
+b2v_REG1_MAN_A : register_16bit
+PORT MAP(CLK => CLK,
+		 Enable => VCC,
+		 Reset => GND,
+		 In => Man_Small_Shifted,
+		 Q => Q_REG1_MAN_A);
+
+
+b2v_REG1_MAN_B : register_15bit
+PORT MAP(CLK => CLK,
+		 Enable => VCC,
+		 Reset => GND,
+		 In => GDFX_TEMP_SIGNAL_6,
+		 Q => SYNTHESIZED_WIRE_11);
+
+
+b2v_REG_EXP_1 : register_5bit
+PORT MAP(CLK => CLK,
+		 Enable => VCC,
+		 Reset => GND,
+		 In => E_max,
+		 Q => SYNTHESIZED_WIRE_16);
+
+
+b2v_REG_EXP_2 : register_5bit
+PORT MAP(CLK => CLK,
+		 Enable => VCC,
+		 Reset => GND,
+		 In => SYNTHESIZED_WIRE_16,
+		 Q => SYNTHESIZED_WIRE_15);
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	SYNTHESIZED_WIRE_18 <= SYNTHESIZED_WIRE_17;
+END IF;
+END PROCESS;
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	DFF_REG_OP1 <= SYNTHESIZED_WIRE_18;
+END IF;
+END PROCESS;
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	DFF_REG_SIGN_1 <= Sign_Temp;
+END IF;
+END PROCESS;
+
+
+PROCESS(CLK)
+BEGIN
+IF (RISING_EDGE(CLK)) THEN
+	Result(15) <= DFF_REG_SIGN_1;
+END IF;
+END PROCESS;
+
+
+b2v_REG_SUM : register_16bit
+PORT MAP(CLK => CLK,
+		 Enable => VCC,
+		 Reset => GND,
+		 In => GDFX_TEMP_SIGNAL_7,
+		 Q => Sum_Result_reg);
+
+
+gdfx_temp0(15) <= Result(15);
+GND <= '0';
+Man_A_Sign(10) <= '1';
+Man_B_Sign(10) <= '1';
+VCC <= '1';
+END bdf_type;

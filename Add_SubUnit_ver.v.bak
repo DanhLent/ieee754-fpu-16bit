@@ -1,0 +1,120 @@
+module Add_SubUnit_ver(
+    input wire CLK,
+    input wire Reset,
+    input wire Start,
+    input wire Select,   // 0: Add, 1: Sub
+    input wire [15:0] Ain,
+    input wire [15:0] Bin,
+    output reg Done,
+    output reg [15:0] Out
+);
+
+    // ============================================================
+    // STAGE 1: DECODE & ALIGNMENT
+    // ============================================================
+    reg [4:0]  s1_exp_max;
+    reg [11:0] s1_man_l, s1_man_s_shifted;
+    reg        s1_sign_l, s1_real_op, s1_start;
+
+    wire sign_a = Ain[15];
+    wire sign_b = Bin[15];
+    wire [4:0] exp_a = Ain[14:10];
+    wire [4:0] exp_b = Bin[14:10];
+    // Thêm bit ẩn 1 vào trước Mantissa (11 bit)
+    wire [10:0] man_a = (exp_a == 0) ? {1'b0, Ain[9:0]} : {1'b1, Ain[9:0]};
+    wire [10:0] man_b = (exp_b == 0) ? {1'b0, Bin[9:0]} : {1'b1, Bin[9:0]};
+
+    wire a_gt_b = (exp_a > exp_b) || (exp_a == exp_b && man_a > man_b);
+    wire [4:0] exp_diff = a_gt_b ? (exp_a - exp_b) : (exp_b - exp_a);
+    
+    // Tín hiệu điều khiển: xác định phép toán thực sự dựa trên dấu và Select
+    wire actual_sub = sign_a ^ sign_b ^ Select;
+
+    always @(posedge CLK or posedge Reset) begin
+        if (Reset) begin
+            s1_start <= 0;
+        end else begin
+            s1_start <= Start;
+            s1_exp_max <= a_gt_b ? exp_a : exp_b;
+            s1_sign_l  <= a_gt_b ? sign_a : (Select ? ~sign_b : sign_b);
+            s1_real_op <= actual_sub;
+            s1_man_l   <= a_gt_b ? {man_a, 1'b0} : {man_b, 1'b0};
+            s1_man_s_shifted <= a_gt_b ? ({man_b, 1'b0} >> exp_diff) : ({man_a, 1'b0} >> exp_diff);
+        end
+    end
+
+    // ============================================================
+    // STAGE 2: ARITHMETIC (ADD/SUB)
+    // ============================================================
+    reg [11:0] s2_sum;
+    reg [4:0]  s2_exp_max;
+    reg        s2_sign_l, s2_real_op, s2_start;
+
+    always @(posedge CLK or posedge Reset) begin
+        if (Reset) begin
+            s2_start <= 0;
+        end else begin
+            s2_start <= s1_start;
+            s2_exp_max <= s1_exp_max;
+            s2_sign_l  <= s1_sign_l;
+            s2_real_op <= s1_real_op;
+            if (s1_real_op)
+                s2_sum <= s1_man_l - s1_man_s_shifted;
+            else
+                s2_sum <= s1_man_l + s1_man_s_shifted;
+        end
+    end
+
+    // ============================================================
+    // STAGE 3: NORMALIZATION & PACKING
+    // ============================================================
+    reg [15:0] final_result;
+    reg        s3_done;
+
+    integer i;
+    reg [3:0] leading_zeros;
+    
+    always @(*) begin
+        // Tìm vị trí bit 1 đầu tiên để chuẩn hóa (Priority Encoder)
+        leading_zeros = 0;
+        if (s2_sum[11]) leading_zeros = 0; // Tràn (Overflow)
+        else if (s2_sum[10]) leading_zeros = 0; // Đã chuẩn
+        else begin
+            leading_zeros = 11; // Mặc định là zero
+            for (i = 10; i >= 0; i = i - 1) begin
+                if (s2_sum[i]) begin
+                    leading_zeros = 10 - i;
+                    break;
+                end
+            end
+        end
+    end
+
+    always @(posedge CLK or posedge Reset) begin
+        if (Reset) begin
+            Done <= 0;
+            Out  <= 16'h0000;
+        end else begin
+            Done <= s2_start; // Done trễ đúng 3 nhịp so với Start
+            if (s2_sum == 0) begin
+                Out <= 16'h0000;
+            end else if (s2_sum[11]) begin
+                // Trường hợp tràn mantissa khi cộng: dịch phải, tăng mũ
+                Out <= {s2_sign_l, (s2_exp_max + 5'd1), s2_sum[10:1]};
+            end else begin
+                // Trường hợp chuẩn hóa dịch trái
+                Out <= {s2_sign_l, (s2_exp_max - leading_zeros), (s2_sum << leading_zeros) >> 1};
+                // Ghi chú: dịch bỏ bit ẩn bằng cách >> 1 sau khi đã đưa bit 1 lên vị trí 10
+                Out[9:0] <= (s2_sum << leading_zeros); 
+                // Cách lấy chuẩn xác 10 bit mantissa sau khi dịch
+                case (leading_zeros)
+                    0:  final_result = {s2_sign_l, s2_exp_max, s2_sum[9:0]};
+                    11: final_result = 16'h0000;
+                    default: final_result = {s2_sign_l, (s2_exp_max - leading_zeros), (s2_sum[10:0] << leading_zeros) >> 1};
+                endcase
+                Out <= final_result;
+            end
+        end
+    end
+
+endmodule

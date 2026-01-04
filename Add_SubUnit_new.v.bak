@@ -1,0 +1,179 @@
+module Add_SubUnit_new(
+    input wire Select,
+    input wire [15:0] Ain,
+    input wire [15:0] Bin,
+    output wire [15:0] Result
+);
+
+// --- KHAI BÁO DÂY ---
+wire A_gt_B;
+wire [3:0] Count;
+wire Cout;
+wire [4:0] Diff;
+wire [4:0] E_max;
+wire [4:0] E_max_plus_1;
+wire [5:0] E_Sub_6bit;
+wire [4:0] Exp_A;
+wire [4:0] Exp_B;
+wire GND;
+wire [10:0] Man_A_Sign;
+wire [10:0] Man_B_Sign;
+wire [10:0] Man_Large;
+wire [15:0] Man_Small_Shifted;
+wire [15:0] Norm_Man;
+wire [15:0] Result_Out;
+wire Sign_A;
+wire Sign_B;
+wire [14:0] Sum_Result;
+wire Op_Effective;
+wire Sign_Final;
+wire [4:0] Exp_Final;
+wire [9:0] Man_Final;
+wire [4:0] E_Norm;
+
+// --- 1. BÓC TÁCH DỮ LIỆU ---
+// Tách bit dấu, mũ, mantissa và thêm bit ẩn (bit 10 = 1)
+data_FP16 b2v_A(
+    .In(Ain),
+    .Sign(Sign_A),
+    .E(Exp_A),
+    .M(Man_A_Sign[9:0]));
+assign Man_A_Sign[10] = 1'b1;
+
+data_FP16 b2v_B(
+    .In(Bin),
+    .Sign(Sign_B),
+    .E(Exp_B),
+    .M(Man_B_Sign[9:0]));
+assign Man_B_Sign[10] = 1'b1;
+
+// --- 2. SO SÁNH VÀ SẮP XẾP ---
+// So sánh mũ để tìm số lớn/bé
+Compare_5bit b2v_inst2(
+    .Ain(Exp_A),
+    .Bin(Exp_B),
+    .A_gt_B(A_gt_B),
+    .Diff(Diff));
+
+// Chọn Mũ lớn nhất (E_max)
+mux2_1_5bit b2v_Compare_Exp(
+    .S(A_gt_B),
+    .D0(Exp_B),
+    .D1(Exp_A),
+    .Y(E_max));
+
+// Chọn Mantissa Lớn/Bé
+mux2_1_11bit b2v_Man_Larger(
+    .S(A_gt_B),
+    .D0(Man_B_Sign),
+    .D1(Man_A_Sign),
+    .Y(Man_Large));
+
+wire [10:0] Man_Small;
+mux2_1_11bit b2v_Man_Small(
+    .S(A_gt_B),
+    .D0(Man_A_Sign),
+    .D1(Man_B_Sign),
+    .Y(Man_Small));
+
+// --- 3. CÂN BẰNG MŨ (SHIFT RIGHT) ---
+// Bão hòa dịch: Nếu lệch > 11 thì dịch max 15 (4'b1111)
+wire [3:0] Shift_Amt;
+mux2_1_4bit b2v_inst8(
+    .S(Diff[4]),      // Nếu bit 4 của Diff là 1 (tức > 15)
+    .D0(Diff[3:0]),   // Nếu nhỏ hơn 16, lấy 4 bit thấp
+    .D1(4'b1111),     // Nếu lớn hơn, lấy 15
+    .Y(Shift_Amt));
+
+Shifter_right b2v_inst1(
+    .In(Man_Small),
+    .S(Shift_Amt),
+    .OUT(Man_Small_Shifted));
+
+// --- 4. TÍNH TOÁN CỘNG/TRỪ (EXECUTION) ---
+assign Op_Effective = (Sign_A ^ Sign_B) ^ Select;
+
+// Chuẩn bị input cho bộ cộng 15 bit:
+// Man_Large (11 bit) nối thêm 4 bit 0 ở đuôi
+wire [14:0] Adder_In_A;
+assign Adder_In_A = {Man_Large, 4'b0000};
+
+// Man_Small_Shifted (16 bit) cắt lấy 15 bit cao
+wire [14:0] Adder_In_B;
+assign Adder_In_B = Man_Small_Shifted[15:1];
+
+AddSub b2v_inst3(
+    .Select(Op_Effective),
+    .Ain(Adder_In_A),
+    .Bin(Adder_In_B),
+    .Cout(Cout),
+    .OUT(Sum_Result));
+
+// --- 5. CHUẨN HÓA (NORMALIZE) ---
+// Gom Cout và Sum để đưa vào LZD
+wire [15:0] Sum_Full;
+assign Sum_Full = {Cout, Sum_Result};
+
+detect_zero b2v_inst4(
+    .In(Sum_Full),
+    .Count(Count));
+
+Shifter_left b2v_inst5(
+    .In(Sum_Full),
+    .S(Count),
+    .OUT(Norm_Man));
+
+// --- 6. TÍNH MŨ MỚI ---
+// [FIX QUAN TRỌNG]: Công thức chuẩn hóa là (E_max + 1) - Count
+// Bước 1: Tính E_max + 1
+Adder_5bit b2v_inst22(
+    .A(E_max),
+    .B(5'd1), // Cộng 1 (Thay vì cộng 2 như cũ)
+    .S(E_max_plus_1));
+
+// Bước 2: Trừ đi Count (Dùng 6 bit để check âm)
+Sub_6bit b2v_inst10(
+    .A({1'b0, E_max_plus_1}), // Mở rộng 6 bit
+    .B({2'b00, Count}),       // Mở rộng 6 bit
+    .S(E_Sub_6bit));
+
+// Xử lý Underflow (Nếu trừ ra âm thì mũ về 0)
+mux2_1_5bit b2v_inst14(
+    .S(E_Sub_6bit[5]),    // Bit dấu
+    .D0(E_Sub_6bit[4:0]), // Dương
+    .D1(5'd0),            // Âm -> 0
+    .Y(E_Norm));
+
+// --- 7. CHỌN KẾT QUẢ CUỐI CÙNG (FINAL MUX) ---
+// Nếu Tràn (Cout=1):
+// - Mantissa: Lấy từ Sum_Result (Dịch phải 1 bit so với chuẩn) -> Lấy [14:5]
+// - Exp: E_max + 1
+// Nếu Không Tràn (Cout=0):
+// - Mantissa: Lấy từ Norm_Man (Sau khi dịch trái) -> Lấy [14:5]
+// - Exp: E_Norm
+
+// Chọn Mantissa
+mux2_1_10bit b2v_inst7(
+    .S(Cout),
+    .D0(Norm_Man[14:5]),   // [FIX]: Lấy từ bit 14 xuống 5 (bỏ bit ẩn 15)
+    .D1(Sum_Result[14:5]), // Trường hợp tràn
+    .Y(Man_Final));
+
+// Chọn Mũ
+mux2_1_5bit b2v_Final(
+    .S(Cout),
+    .D0(E_Norm),           // Mũ sau khi chuẩn hóa
+    .D1(E_max_plus_1),     // Mũ tăng 1 do tràn
+    .Y(Exp_Final));
+
+// Chọn Dấu
+mux2_1_1bit b2v_inst18(
+    .S(A_gt_B),
+    .D0(Sign_B),
+    .D1(Sign_A),
+    .Y(Sign_Final));
+
+// --- 8. ĐÓNG GÓI OUTPUT ---
+assign Result = {Sign_Final, Exp_Final, Man_Final};
+
+endmodule

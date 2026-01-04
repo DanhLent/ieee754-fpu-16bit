@@ -1,0 +1,99 @@
+`timescale 1ns / 1ps
+
+module tb_addsub;
+
+    // 1. Khai báo dây nối (Inputs nối vào reg, Outputs nối vào wire)
+    reg clk;
+    reg rst_n;
+    reg start;
+    reg opcode; // 0: Add, 1: Sub
+    reg [15:0] in_a;
+    reg [15:0] in_b;
+
+    wire [15:0] out;
+    wire done;
+
+    // 2. Gọi module addsub (DUT - Device Under Test) ra để test
+    addsub u_dut (
+        .clk(clk),
+        .rst_n(rst_n),
+        .start(start),
+        .opcode(opcode),
+        .in_a(in_a),
+        .in_b(in_b),
+        .out(out),
+        .done(done)
+    );
+
+    // 3. Tạo xung Clock (Chu kỳ 10ns = 100MHz)
+    always #5 clk = ~clk;
+
+    // 4. Kịch bản chạy thử
+    initial begin
+        // --- Giai đoạn khởi tạo ---
+        clk = 0;
+        rst_n = 0;   // Giữ nút reset
+        start = 0;
+        opcode = 0;
+        in_a = 0;
+        in_b = 0;
+
+        #20;         // Đợi 20ns
+        rst_n = 1;   // Thả nút reset ra
+        #10;
+
+        // --- Bắt đầu Test ---
+        $display("---------------------------------------------------");
+        $display("STARTING SIMULATION...");
+
+        // CASE 1: 1.0 + 2.0 = 3.0
+        // 1.0 = 0x3C00, 2.0 = 0x4000
+        run_test(16'h3C00, 16'h4000, 0); // Opcode 0 = Add
+
+        // CASE 2: 1.5 - 1.0 = 0.5
+        // 1.5 = 0x3E00, 1.0 = 0x3C00
+        run_test(16'h3E00, 16'h3C00, 1); // Opcode 1 = Sub
+
+        // CASE 3: 0.0 + 5.0 = 5.0 (Test số 0)
+        run_test(16'h0000, 16'h4500, 0);
+
+        // CASE 4: Inf + Inf = Inf (Test vô cực)
+        // Inf = 0x7C00
+        run_test(16'h7C00, 16'h7C00, 0);
+
+        $display("SIMULATION FINISHED.");
+        $display("---------------------------------------------------");
+        $stop; // Dừng mô phỏng
+    end
+
+    // --- Task (Hàm) hỗ trợ gửi dữ liệu cho gọn code ---
+    task run_test;
+        input [15:0] val_a;
+        input [15:0] val_b;
+        input op;
+        begin
+            // 1. Thiết lập đầu vào tại sườn xuống của clock (để tránh lỗi)
+            @(negedge clk);
+            in_a = val_a;
+            in_b = val_b;
+            opcode = op;
+            start = 1; // Bấm nút Start
+
+            // 2. Giữ nút Start trong 1 chu kỳ rồi thả ra
+            @(negedge clk);
+            start = 0;
+
+            // 3. Chờ cho đến khi mạch báo Done
+            wait(done);
+            
+            // 4. In kết quả ra màn hình Console
+            // Chờ thêm 1 tẹo để tín hiệu ổn định hẳn rồi mới in
+            #1; 
+            $display("Time: %t | Op: %b | A: %h | B: %h | Result: %h", $time, op, val_a, val_b, out);
+            
+            // 5. Nghỉ 20ns trước khi sang phép tính tiếp theo
+            #20;
+        end
+    endtask
+
+endmodule

@@ -1,0 +1,448 @@
+/*
+ * File Name   : fp16_addsub_fsm.v
+ * Author      : Nguyen Huu Phuoc
+ * Date        : 2026-01-03
+ * Description : 16-bit (Half-Precision) IEEE 754 Floating Point Adder/Subtractor
+ *               using a sequential FSM datapath. Handles corner cases (Zero,
+ *               Infinity, NaN). Alignment and normalization are performed
+ *               iteratively with shift registers (per-clock shifting) to
+ *               reduce area versus large combinational barrel shifters.
+ *
+ * License     : MIT License
+ *
+ * MIT License
+ *
+ * Copyright (c) 2026 Nguyen Huu Phuoc
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+`default_nettype none
+
+module addsub (
+    input  wire        clk,
+    input  wire        rst_n,
+    input  wire        start,
+    input  wire        opcode,     // 0: Add, 1: Sub  =>  A + (B xor opcode_signflip)
+    input  wire [15:0] in_a,
+    input  wire [15:0] in_b,
+    output reg  [15:0] out_res,
+    output reg         done,
+    output reg         ready,
+    output reg         busy
+);
+
+    localparam [3:0] S_IDLE   = 4'd0;
+    localparam [3:0] S_DECODE = 4'd1;
+    localparam [3:0] S_ALIGN  = 4'd2;
+    localparam [3:0] S_ADD    = 4'd3;
+    localparam [3:0] S_NORM   = 4'd4;
+    localparam [3:0] S_ROUND  = 4'd5;
+    localparam [3:0] S_PACK   = 4'd6;
+    localparam [3:0] S_DONE   = 4'd7;
+
+    reg [3:0] state;
+
+    reg        opcode_r;
+    reg [15:0] a_r, b_r;
+
+    reg        sign_a, sign_b, sign_b_eff;
+    reg [4:0]  exp_a, exp_b;
+    reg [9:0]  frac_a, frac_b;
+
+    reg        is_zero_a, is_zero_b;
+    reg        is_inf_a,  is_inf_b;
+    reg        is_nan_a,  is_nan_b;
+
+    reg [5:0]  exp_a_adj, exp_b_adj;
+    reg [10:0] mantissa_a11, mantissa_b11;
+
+    reg        same_sign;
+    reg        a_is_large_mag;
+
+    reg        sign_large, sign_small;
+    reg [5:0]  exp_large, exp_small;
+    reg [13:0] mant_large, mant_small;
+
+    reg        sign_res;
+    reg [5:0]  exp_work;
+    reg [14:0] mant_work;
+
+    reg        sticky_acc;
+
+    reg [15:0] special_res;
+    reg        special_hit;
+
+    function [15:0] make_qnan;
+        input [9:0] payload;
+        reg [9:0] qpayload;
+        begin
+            qpayload = payload | 10'h200;
+            make_qnan = {1'b0, 5'h1F, qpayload};
+        end
+    endfunction
+
+    function [15:0] make_inf;
+        input s;
+        begin
+            make_inf = {s, 5'h1F, 10'h000};
+        end
+    endfunction
+
+    function [15:0] make_zero;
+        input s;
+        begin
+            make_zero = {s, 5'h00, 10'h000};
+        end
+    endfunction
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state      <= S_IDLE;
+            out_res    <= 16'h0000;
+            done       <= 1'b0;
+            ready      <= 1'b1;
+            busy       <= 1'b0;
+
+            opcode_r   <= 1'b0;
+            a_r        <= 16'h0000;
+            b_r        <= 16'h0000;
+
+            sign_a     <= 1'b0;
+            sign_b     <= 1'b0;
+            sign_b_eff <= 1'b0;
+            exp_a      <= 5'h00;
+            exp_b      <= 5'h00;
+            frac_a     <= 10'h000;
+            frac_b     <= 10'h000;
+
+            is_zero_a  <= 1'b1;
+            is_zero_b  <= 1'b1;
+            is_inf_a   <= 1'b0;
+            is_inf_b   <= 1'b0;
+            is_nan_a   <= 1'b0;
+            is_nan_b   <= 1'b0;
+
+            exp_a_adj  <= 6'd1;
+            exp_b_adj  <= 6'd1;
+            mantissa_a11 <= 11'd0;
+            mantissa_b11 <= 11'd0;
+
+            same_sign  <= 1'b0;
+            a_is_large_mag <= 1'b1;
+
+            sign_large <= 1'b0;
+            sign_small <= 1'b0;
+            exp_large  <= 6'd1;
+            exp_small  <= 6'd1;
+            mant_large <= 14'd0;
+            mant_small <= 14'd0;
+
+            sign_res   <= 1'b0;
+            exp_work   <= 6'd1;
+            mant_work  <= 15'd0;
+
+            sticky_acc <= 1'b0;
+
+            special_res <= 16'h0000;
+            special_hit <= 1'b0;
+        end else begin
+            done  <= 1'b0;
+
+            case (state)
+                S_IDLE: begin
+                    ready <= 1'b1;
+                    busy  <= 1'b0;
+
+                    if (start) begin
+                        opcode_r <= opcode;
+                        a_r      <= in_a;
+                        b_r      <= in_b;
+
+                        ready <= 1'b0;
+                        busy  <= 1'b1;
+                        state <= S_DECODE;
+                    end
+                end
+
+                S_DECODE: begin
+                    sign_a <= a_r[15];
+                    exp_a  <= a_r[14:10];
+                    frac_a <= a_r[9:0];
+
+                    sign_b <= b_r[15];
+                    exp_b  <= b_r[14:10];
+                    frac_b <= b_r[9:0];
+
+                    sign_b_eff <= b_r[15] ^ opcode_r;
+
+                    is_zero_a <= (a_r[14:0] == 15'h0000);
+                    is_zero_b <= (b_r[14:0] == 15'h0000);
+
+                    is_inf_a  <= (a_r[14:10] == 5'h1F) && (a_r[9:0] == 10'h000);
+                    is_inf_b  <= (b_r[14:10] == 5'h1F) && (b_r[9:0] == 10'h000);
+
+                    is_nan_a  <= (a_r[14:10] == 5'h1F) && (a_r[9:0] != 10'h000);
+                    is_nan_b  <= (b_r[14:10] == 5'h1F) && (b_r[9:0] != 10'h000);
+
+                    exp_a_adj <= (a_r[14:10] == 5'h00) ? 6'd1 : {1'b0, a_r[14:10]};
+                    exp_b_adj <= (b_r[14:10] == 5'h00) ? 6'd1 : {1'b0, b_r[14:10]};
+
+                    mantissa_a11 <= { (a_r[14:10] != 5'h00), a_r[9:0] };
+                    mantissa_b11 <= { (b_r[14:10] != 5'h00), b_r[9:0] };
+
+                    special_hit <= 1'b0;
+                    special_res <= 16'h0000;
+
+                    begin : special_cases
+                        reg [15:0] qnan_payload;
+                        reg [15:0] b_eff_full;
+
+                        b_eff_full = { (b_r[15] ^ opcode_r), b_r[14:0] };
+
+                        if ((a_r[14:10] == 5'h1F) && (a_r[9:0] != 10'h000)) begin
+                            special_hit <= 1'b1;
+                            special_res <= make_qnan(a_r[9:0]);
+                        end else if ((b_r[14:10] == 5'h1F) && (b_r[9:0] != 10'h000)) begin
+                            special_hit <= 1'b1;
+                            special_res <= make_qnan(b_r[9:0]);
+                        end else if (((a_r[14:10] == 5'h1F) && (a_r[9:0] == 10'h000)) &&
+                                     ((b_r[14:10] == 5'h1F) && (b_r[9:0] == 10'h000))) begin
+                            if (a_r[15] == (b_r[15] ^ opcode_r)) begin
+                                special_hit <= 1'b1;
+                                special_res <= make_inf(a_r[15]);
+                            end else begin
+                                special_hit <= 1'b1;
+                                special_res <= make_qnan(10'h200);
+                            end
+                        end else if ((a_r[14:10] == 5'h1F) && (a_r[9:0] == 10'h000)) begin
+                            special_hit <= 1'b1;
+                            special_res <= make_inf(a_r[15]);
+                        end else if ((b_r[14:10] == 5'h1F) && (b_r[9:0] == 10'h000)) begin
+                            special_hit <= 1'b1;
+                            special_res <= make_inf(b_r[15] ^ opcode_r);
+                        end else if (a_r[14:0] == 15'h0000 && b_r[14:0] == 15'h0000) begin
+                            if (a_r[15] == (b_r[15] ^ opcode_r)) begin
+                                special_hit <= 1'b1;
+                                special_res <= make_zero(a_r[15]);
+                            end else begin
+                                special_hit <= 1'b1;
+                                special_res <= make_zero(1'b0);
+                            end
+                        end else if (a_r[14:0] == 15'h0000) begin
+                            special_hit <= 1'b1;
+                            special_res <= { (b_r[15] ^ opcode_r), b_r[14:0] };
+                        end else if (b_r[14:0] == 15'h0000) begin
+                            special_hit <= 1'b1;
+                            special_res <= a_r;
+                        end
+                    end
+
+                    if (special_hit) begin
+                        out_res <= special_res;
+                        state   <= S_DONE;
+                    end else begin
+                        same_sign <= (a_r[15] == (b_r[15] ^ opcode_r));
+
+                        if (((a_r[14:10] == 5'h00) ? 6'd1 : {1'b0, a_r[14:10]}) >
+                            ((b_r[14:10] == 5'h00) ? 6'd1 : {1'b0, b_r[14:10]})) begin
+                            a_is_large_mag <= 1'b1;
+                        end else if (((a_r[14:10] == 5'h00) ? 6'd1 : {1'b0, a_r[14:10]}) <
+                                     ((b_r[14:10] == 5'h00) ? 6'd1 : {1'b0, b_r[14:10]})) begin
+                            a_is_large_mag <= 1'b0;
+                        end else begin
+                            a_is_large_mag <= ({ (a_r[14:10] != 5'h00), a_r[9:0] } >=
+                                              { (b_r[14:10] != 5'h00), b_r[9:0] });
+                        end
+
+                        sticky_acc <= 1'b0;
+
+                        if (a_is_large_mag) begin
+                            sign_large <= a_r[15];
+                            sign_small <= (b_r[15] ^ opcode_r);
+
+                            exp_large  <= (a_r[14:10] == 5'h00) ? 6'd1 : {1'b0, a_r[14:10]};
+                            exp_small  <= (b_r[14:10] == 5'h00) ? 6'd1 : {1'b0, b_r[14:10]};
+
+                            mant_large <= { (a_r[14:10] != 5'h00), a_r[9:0], 3'b000 };
+                            mant_small <= { (b_r[14:10] != 5'h00), b_r[9:0], 3'b000 };
+                        end else begin
+                            sign_large <= (b_r[15] ^ opcode_r);
+                            sign_small <= a_r[15];
+
+                            exp_large  <= (b_r[14:10] == 5'h00) ? 6'd1 : {1'b0, b_r[14:10]};
+                            exp_small  <= (a_r[14:10] == 5'h00) ? 6'd1 : {1'b0, a_r[14:10]};
+
+                            mant_large <= { (b_r[14:10] != 5'h00), b_r[9:0], 3'b000 };
+                            mant_small <= { (a_r[14:10] != 5'h00), a_r[9:0], 3'b000 };
+                        end
+
+                        state <= S_ALIGN;
+                    end
+                end
+
+                S_ALIGN: begin
+                    /*
+                     * Alignment loop:
+                     * Shift the smaller mantissa right by 1 each cycle until exponents match.
+                     * sticky_acc accumulates bits shifted out to support later rounding.
+                     */
+                    if (exp_small < exp_large) begin
+                        sticky_acc <= sticky_acc | mant_small[0];
+                        mant_small <= {1'b0, mant_small[13:1]};
+                        exp_small  <= exp_small + 6'd1;
+                        state      <= S_ALIGN;
+                    end else begin
+                        exp_work <= exp_large;
+
+                        if (same_sign) begin
+                            sign_res <= sign_large;
+                        end else begin
+                            sign_res <= sign_large;
+                        end
+
+                        state <= S_ADD;
+                    end
+                end
+
+                S_ADD: begin
+                    if (same_sign) begin
+                        mant_work <= {1'b0, mant_large} + {1'b0, mant_small};
+                    end else begin
+                        mant_work <= {1'b0, mant_large} - {1'b0, mant_small};
+                    end
+                    state <= S_NORM;
+                end
+
+                S_NORM: begin
+                    /*
+                     * Normalization loop (shift register based):
+                     * - If carry-out exists (mant_work[14]) => shift right, increment exponent.
+                     * - Else if leading one missing and exponent can decrease => shift left, decrement exponent.
+                     * Stops when normalized ( keeps exp_work > 1 ) or reaches subnormal domain (exp_work == 1).
+                     */
+                    if (mant_work == 15'd0) begin
+                        out_res <= make_zero(1'b0);
+                        state   <= S_DONE;
+                    end else if (mant_work[14]) begin
+                        sticky_acc <= sticky_acc | mant_work[0];
+                        mant_work  <= {1'b0, mant_work[14:1]};
+                        exp_work   <= exp_work + 6'd1;
+                        state      <= S_NORM;
+                    end else if (!mant_work[13] && (exp_work > 6'd1)) begin
+                        mant_work <= {mant_work[13:0], 1'b0};
+                        exp_work  <= exp_work - 6'd1;
+                        state     <= S_NORM;
+                    end else begin
+                        state <= S_ROUND;
+                    end
+                end
+
+                S_ROUND: begin
+                    /*
+                     * Basic rounding: Round-to-Nearest-Even using Guard/ Round / Sticky.
+                     * mant_work[13:0] = {mantissa(11 bits incl hidden), extra(3 bits)}
+                     * guard = bit[2], round = bit[1], sticky = bit[0] OR sticky_acc
+                     */
+                    begin : rounding_block
+                        reg [13:0] mant_14;
+                        reg guard_bit;
+                        reg round_bit;
+                        reg sticky_bit;
+                        reg lsb_kept;
+                        reg inc;
+
+                        reg [10:0] mant_main;
+                        reg [11:0] mant_main_ext;
+                        reg [10:0] mant_main_rounded;
+                        reg [5:0]  exp_post;
+
+                        mant_14    = mant_work[13:0];
+
+                        guard_bit  = mant_14[2];
+                        round_bit  = mant_14[1];
+                        sticky_bit = mant_14[0] | sticky_acc;
+                        lsb_kept   = mant_14[3];
+
+                        inc        = guard_bit & (round_bit | sticky_bit | lsb_kept);
+
+                        mant_main      = mant_14[13:3];
+                        mant_main_ext  = {1'b0, mant_main} + {11'd0, inc};
+                        exp_post       = exp_work;
+
+                        if (mant_main_ext[11]) begin
+                            mant_main_rounded = mant_main_ext[11:1];
+                            exp_post          = exp_work + 6'd1;
+                        end else begin
+                            mant_main_rounded = mant_main_ext[10:0];
+                        end
+
+                        exp_work  <= exp_post;
+                        mant_work <= {1'b0, mant_main_rounded, 3'b000};
+                    end
+
+                    state <= S_PACK;
+                end
+
+                S_PACK: begin
+                    if (exp_work >= 6'd31) begin
+                        out_res <= make_inf(sign_res);
+                    end else begin
+                        begin : pack_block
+                            reg [10:0] mant_main_final;
+                            reg [4:0]  exp_out;
+                            reg [9:0]  frac_out;
+
+                            mant_main_final = mant_work[13:3];
+
+                            if (mant_main_final == 11'd0) begin
+                                out_res <= make_zero(1'b0);
+                            end else begin
+                                exp_out  = (mant_main_final[10]) ? exp_work[4:0] : 5'd0;
+                                frac_out = mant_main_final[9:0];
+
+                                if (exp_out == 5'd0 && frac_out == 10'd0) begin
+                                    out_res <= make_zero(1'b0);
+                                end else begin
+                                    out_res <= {sign_res, exp_out, frac_out};
+                                end
+                            end
+                        end
+                    end
+
+                    state <= S_DONE;
+                end
+
+                S_DONE: begin
+                    done  <= 1'b1;
+                    ready <= 1'b1;
+                    busy  <= 1'b0;
+                    state <= S_IDLE;
+                end
+
+                default: begin
+                    state <= S_IDLE;
+                end
+            endcase
+        end
+    end
+
+endmodule
+
+`default_nettype wire
